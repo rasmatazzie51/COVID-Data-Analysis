@@ -1,0 +1,542 @@
+---
+title: "Analysis of COVID-19 Data collected between 2020-2023 for USA, including Washington, D.C. and US Territories"
+author: "WER"
+date: "2024-10-04"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+In late 2019 to early 2020, what became known as the COVID-19 pandemic took hold around the world. Now, almost 5 years later in October 2024 I have the opportunity to examine years worth of data collected from around the world. The global data includes country names, dates, cumulative numbers of cases, and cumulative deaths. 
+
+Information specific to the USA and its territories, along with two cruise ships was also collected. The US data includes information for: 50 states, Washington D.C., five territories (American Samoa, Guam, Northern Mariana Islands, Puerto Rico, US Virgin Islands), and two cruise ships (Diamond Princess and Grand Princess). This data collection contains columns with information on: UN country code (useful for sorting the territories), state names, counties, dates, cumulative cases, cumulative deaths, and population data for the counties. The cruise ship data is interesting to view numbers of cases by date (one can see the increase in cases as time passes), but no population data on the ships was entered into the US_deaths collection. 
+
+For the purposes of my analysis I decided to focus on the US Data. More specifically, I have focused on the states, Washington, D.C., and the territories, and have peripherally looked at the cruise ships.
+
+I have always wondered whether some states performed better than others in terms of survival rates. That is, did some states' actual death rates exceed a predicted death rate? Turns out that some did indeed fare better than others when we look at the difference between *predicted* deaths/person and *actual* deaths/person.
+
+It is important to normalize the data for the states by looking at the *rates per person*. Otherwise states such as Wyoming which has a very small population may inaccurately been seen as having a very low death rate when in fact it's just a case of a smaller population (read on to see how Wyoming actually fared).
+
+## Data Preparation
+
+### Load Libraries
+
+```{r, echo=FALSE}
+library(tidyverse)
+library(lubridate)
+```
+
+### Concatenate & Read in .csv files
+
+```{r, echo=FALSE}
+url_in <- "https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/csse_covid_19_time_series/"
+
+filenames <- c("time_series_covid19_confirmed_US.csv",  "time_series_covid19_confirmed_global.csv", "time_series_covid19_deaths_US.csv",  "time_series_covid19_deaths_global.csv")
+cs = str_c(url_in, filenames)
+```
+
+cs[1] [1]
+"<https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/csse_covid_19_time_series/time_series_covid19_confirmed_US.csv>"
+
+cs[2] [1]
+"<https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/csse_covid_19_time_series/time_series_covid19_confirmed_global.csv>"
+
+cs[3] [1]
+"<https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/csse_covid_19_time_series/time_series_covid19_deaths_US.csv>"
+
+cs[4] [1]
+"<https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/csse_covid_19_time_series/time_series_covid19_deaths_global.csv>"
+
+**Variable Names for Each of the csv files:**
+
+```{r}
+US_cases <- read_csv(cs[1])
+global_cases <- read_csv(cs[2])
+US_deaths <- read_csv(cs[3])
+global_deaths <- read_csv(cs[4])
+```
+
+## Tidying & Transforming Data
+
+### **US Cases (cs[1])**
+
+Caution! Do not assume that the information in a column is exactly what
+you think it is!
+
+Modify US_cases to remove Lat/Long, make a "date" column, adjust names
+of some columns. First, I checked the information supplied in each
+column that wasn't immediately obvious. In particular, "code3" and "Admin2". These contain UN Country codes and County Names, respectively.
+
+```{r, include=FALSE}
+#Confirmed that "Admin2" == County Name:
+US_cases %>% filter(Province_State == "Colorado")
+
+#Looking for unique values in rows**
+ sort(unique(US_cases$Province_State))
+```
+
+From the US Data, we want to keep:
+
+1.  code3 (UN Country code)
+
+2.  Admin2 (County)
+
+3.  Province_State
+
+4.  Country_Region
+
+5.  Combined_Key (County, State)
+
+6.  date
+
+7.  cases
+
+**1) Pivot and 2) Select columns of interest**
+```{r}
+US_cases <- US_cases %>%
+  pivot_longer(cols = -c(UID, 'iso2', 'iso3', code3, FIPS, 'Admin2', 'Province_State', 
+                         'Country_Region', Lat, Long_, 'Combined_Key'), 
+                names_to = "date", 
+                values_to = "cases")%>%
+  select(-c(Lat, Long_, UID, FIPS))
+```
+
+**3) Mutate "Date" data from 'chr' to 'date'**
+```{r}
+US_cases <- US_cases %>%
+   mutate(date = mdy(date))
+```
+
+### US Deaths (cs[3])
+
+We need to modify US_deaths to remove Lat/Long, make a "date" column,
+remove UID, FIPS, make a "deaths" column. The US_Deaths data contains a
+column for Population, so we will keep this as well because it will be
+very useful to calculate cases/person and deaths/person for use in a
+prediction model.
+
+From the US_deaths data, we want to keep:
+
+1.  code3 (UN Country code)
+
+2.  Admin2 (County)
+
+3.  Province_State
+
+4.  Country_Region
+
+5.  Combined_Key (County, State)
+
+6.  Population
+
+7.  date
+
+8.  deaths
+
+**1) Pivot and 2) Select Columns of Interest**
+
+```{r}
+US_deaths <- US_deaths %>%
+  pivot_longer(cols = -c(UID, iso2, iso3, code3, FIPS, Admin2, 'Province_State', 
+                         'Country_Region', Lat, Long_, Combined_Key, Population), 
+  names_to = "date", 
+  values_to = "deaths")%>%
+  select(-c(Lat, Long_, UID, FIPS))  
+```
+
+**3) Mutate "Date" data from 'chr' to 'date'**
+
+```{r}
+US_deaths <- US_deaths %>% mutate(date = mdy(date))
+```
+
+### Global Cases (cs[2])
+
+Modify global_cases to remove Lat/Long, make a "date" column, adjust names of province/state and country/region
+
+**1) Pivot and 2) Select Columns of Interest**
+
+```{r}
+global_cases <- global_cases %>%
+  pivot_longer(cols = -c('Province/State', 'Country/Region', Lat, Long), 
+                names_to = "date", 
+                values_to = "cases")%>%
+  select(-c(Lat, Long))
+```
+
+**3) Mutate "Date" data from 'chr' to 'date'**
+
+```{r}
+global_cases <- global_cases %>%
+  mutate(date = mdy(date))
+```
+
+**4) Change names of "Province/State" & "County/Region" to use Underscores**
+
+```{r}
+global_cases <- global_cases %>%
+  rename(Province_State = 'Province/State', Country_Region = 'Country/Region')
+```
+
+### Global Deaths
+
+Modify global_deaths to remove Lat/Long, make a "date" column, adjust names of province/state and country/region
+
+**1) Pivot and 2) Select Columns of Interest**
+
+```{r}
+global_deaths <- global_deaths %>%
+  pivot_longer(cols = -c('Province/State', 'Country/Region', Lat, Long), 
+                names_to = "date", 
+                values_to = "cases")%>%
+  select(-c(Lat, Long))
+```
+
+**3) Mutate "Date" data from 'chr' to 'date'**
+
+```{r}
+global_deaths <- global_deaths %>%
+  mutate(date = mdy(date))
+```
+
+**4) Change name of "Province/State" & "County/Region" to use Underscores**
+
+```{r}
+global_deaths <- global_deaths %>%
+  rename(Province_State = "Province/State", Country_Region = "Country/Region")
+```
+
+## Summaries of US_cases and US_deaths
+Including a summary of these two data sets to verify number of rows, min and max dates, types of data
+
+**US_cases:**
+```{r, echo = FALSE}
+summary(US_cases)
+```
+
+**US_deaths:**
+```{r, echo = FALSE}
+
+summary(US_deaths)
+```
+
+## Graphing of Data
+
+```{r, include=FALSE}
+US_deaths %>% filter(Population == max(US_deaths$Population))
+10039107
+```
+
+```{r, include=FALSE}
+#Firstly, created a function to find the total population of California
+california <- US_deaths %>% filter(Province_State == "California")
+keys <- unique(california$Combined_Key)
+key <- first(keys)
+# The function takes a Combined_Key and finds the population
+# Do it for all Combined_Keys 
+ca_county2population <- sapply(keys, function(key) first(california %>% 
+                                              filter(Combined_Key == key))$Population )
+ca_population <- sum(ca_county2population)
+```
+
+**1. Calculating & Graphing population for each Province_State:** 
+
+It is important to note that within each state there is a Combined_Key field containing population numbers for each city/county. We need to sum up these value to obtain the total population. 
+```{r, fig.width=12, fig.height=6}
+par(mar = c(10, 6, 4, 2), mgp = c(5, 0.5, 0))
+
+state2population <- function(state) {
+  df <- US_deaths %>% filter(Province_State == state);
+  keys <- unique(df$Combined_Key);
+  key <- first(keys);
+  state_county2population <- sapply(keys, function(key) first(df %>% 
+                                                filter(Combined_Key == key))$Population );
+  state_population <- sum(state_county2population);
+  return( state_population );
+}
+states <- unique(US_deaths$Province_State)
+state_populations <- sapply(states, state2population );
+
+#model_data <- model_data %>% filter(state_populations!=0)
+
+barplot(
+  state_populations,  # y
+  names.arg=states, # x
+  las = 2, 
+  cex.names = 0.8,
+  main = "COVID-era Population by State, incl Territories & Cruise Ships", 
+  xlab = "Province_State",
+  ylab ="Population")
+```
+Summary of Population by unique Province_State, showing a 0 value for the cruise ships:
+```{r, echo=FALSE}
+state_populations
+```
+
+
+<!-- #Creating Variable for Territories -->
+
+<!-- US_territories <- US_deaths %>% filter(code3 %in% c("16", "316", "580", "630","850")) -->
+
+<!-- #Calculating and Graphing Population of US Territories -->
+
+<!-- #state2population <- function(state) { -->
+
+<!-- #  df <- US_territories %>% filter(Province_State == state); -->
+
+<!-- #  keys <- unique(df$Combined_Key); -->
+
+<!-- #  key <- first(keys); -->
+
+<!-- #  state_county2population <- sapply(keys, function(key) first(df %>% filter(Combined_Key == key))$Population ); -->
+
+<!-- #  state_population <- sum(state_county2population); -->
+
+<!-- #  return( state_population ); -->
+
+<!-- #} -->
+
+<!-- #states <- unique(US_territories$Province_State) -->
+
+<!-- #state_populations <- sapply(states, state2population ); -->
+
+<!-- # -->
+
+<!-- #barplot( -->
+
+<!-- #  state_populations,  # y -->
+
+<!-- #  names.arg=states, # x -->
+
+<!-- #  las = 2, main = "COVID-era Population by US Territories", ylab ="Population") -->
+
+
+
+**2. Calculating & Graphing Total Cases for each Province_State:**
+
+Again, we need to calculate the total based on the values listed by city/county (ie the Combined_Key)
+```{r, include=FALSE}
+#Start with a Single State
+cali_cases <- US_cases %>% filter(Province_State == "California")
+keys <- unique(cali_cases$Combined_Key)
+key <- last(keys)
+# The function takes a Combined_Key and finds the cases
+# Do it for all Combined_Keys 
+ca_county_cases <- sapply(keys, function(key) last(cali_cases %>% 
+                                              filter(Combined_Key == key))$cases )
+cali_total_cases <- sum(ca_county_cases)
+
+barplot(
+  ca_county_cases,  # y
+  names.arg=keys, # x
+  las = 2, main = "California COVID cases by County",
+  ylab ="Cases")
+```
+
+
+
+<!-- *Now Moving out to get total cases per all states, territories, cruise ships* -->
+
+```{r,fig.width=12, fig.height=6}
+par(mar = c(10, 6, 4, 2), mgp = c(5, 0.5, 0))
+
+state2statecases <- function(state) {
+  df <- US_cases %>% filter(Province_State == state);
+  keys <- unique(df$Combined_Key);
+  #key <- last(keys);
+  cases_per_state <- sapply(keys, function(key) last(df %>% 
+                                                filter(Combined_Key == key))$cases );
+  state_cases <- sum(cases_per_state);
+  return( state_cases );
+}
+states <- unique(US_cases$Province_State)
+state_cases <- sapply(states, state2statecases )
+
+barplot( 
+  state_cases, 
+  names.arg = states, 
+  las = 2,
+  cex.names = 0.8,
+  main = "Total COVID cases per State, incl. Territories & Cruise Ships", 
+  xlab = "Province_State",
+  ylab = "Total Cases")
+```
+Summary of total cases by unique Province_State (states, Washington DC, territories, cruise ships):
+```{r, echo=FALSE}
+state_cases
+```
+
+
+
+<!-- # Calculating and Graphing Deaths per State.  -->
+
+<!-- *Find Deaths for each unique "Combined_Key" entry again and summing them up. -->
+
+<!-- *Start with a Single State* -->
+
+```{r, include=FALSE}
+cali_deaths <- US_deaths %>% filter(Province_State == "California")
+keys <- unique(cali_deaths$Combined_Key)
+key <- last(keys)
+# The function takes a Combined_Key and finds the cases
+# Do it for all Combined_Keys 
+ca_county_deaths <- sapply(keys, function(key) last(cali_deaths %>% 
+                                              filter(Combined_Key == key))$deaths )
+cali_total_deaths <- sum(ca_county_deaths)
+
+barplot(
+  ca_county_deaths,  # y
+  names.arg=keys, # x
+  las = 2, main = "California COVID deaths by County", ylab ="Deaths")
+```
+
+<!-- *Now Moving out to get total deaths per all states, territories, cruise ships* -->
+**3. Calculating & Graphing Total Deaths for each Province_State**
+
+Again, we need to calculate the total based on the values listed by city/county (ie the Combined_Key)
+
+```{r,fig.width=12, fig.height=6}
+par(mar = c(10, 6, 4, 2), mgp = c(5, 0.5, 0))
+
+state2statedeaths <- function(state) {
+  df <- US_deaths %>% filter(Province_State == state);
+  keys <- unique(df$Combined_Key);
+  #key <- last(keys);
+  deaths_per_state <- sapply(keys, function(key) last(df %>% 
+                                                  filter(Combined_Key == key))$deaths );
+  state_deaths <- sum(deaths_per_state);
+  return( state_deaths );
+}
+states <- unique(US_deaths$Province_State)
+state_deaths <- sapply(states, state2statedeaths )
+
+barplot( 
+  state_deaths, 
+  names.arg = states, 
+  las = 2,
+  cex.names = 0.8,
+  main = "Total COVID deaths per State, incl Territories & Cruise Ships", 
+  xlab = "Province_State",
+  ylab = "Total Deaths")
+```
+
+Summary of total deaths by unique Province_State (states, Washington DC, territories, cruise ships):
+```{r, echo=FALSE}
+state_deaths
+```
+
+## Modeling:
+In order to predict the death rate for a given area based on the population, we first need to calculate the cases/person and deaths/person for each area:
+
+1. Cases per Person
+
+1. Actual Deaths per Person
+
+1. Predicted Death Rate per person
+
+```{r, fig.width=12, fig.height=6}
+par(mar = c(10, 6, 4, 2), mgp = c(5, 0.5, 0))
+
+#Creating a Model to predict deaths per case per population
+model_data <- data.frame(
+  states = states, 
+  state_cases = state_cases,
+  state_deaths = state_deaths, 
+  state_populations = state_populations, 
+  state_cases_per_person = state_cases / state_populations,
+  state_deaths_per_person = state_deaths / state_populations
+)
+#Filtering out zero data for cruise ships because cannot divide by 0
+model_data <- model_data %>% filter(state_populations!=0)
+
+#Graph of Cases per Person 
+barplot( 
+  model_data$state_cases_per_person, 
+  names.arg = model_data$states, 
+  las = 2, main = "Cases per Person by State (incl territories & 'D.C.')", 
+  xlab = "State_Province",
+  ylab = "Cases per person")
+
+#Graph of Deaths per Person
+barplot( 
+  model_data$state_deaths_per_person, 
+  names.arg = model_data$states, 
+  las = 2, 
+  cex.names = 0.8,
+  main = "Deaths per Person by State (incl territories & 'D.C.')", 
+  xlab = "State_Province",
+  ylab = "Deaths per person")
+
+death_rate_model <- lm(model_data$state_deaths_per_person ~ model_data$state_cases_per_person, 
+            data = model_data)
+
+predictions <- predict(death_rate_model, newdata = model_data)
+
+library(ggplot2)
+
+# Add predictions to the model_data
+model_data_with_prediction <- model_data %>% 
+                             mutate(predicted_deaths_per_person = predictions)
+
+# Create a histogram
+model_long <- model_data_with_prediction %>%
+  select(states, state_deaths_per_person, predicted_deaths_per_person) %>%
+  pivot_longer(cols = c(state_deaths_per_person, predicted_deaths_per_person),
+               names_to = "Type",
+               values_to = "Deaths_Per_Person")
+
+# Create a  plot
+ggplot(model_long, aes(x = states, y = Deaths_Per_Person, fill = Type)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  labs(title = "Deaths Per Person vs Predicted Deaths per Person by State (incl territories & 'D.C.')",
+       x = "State_Province",
+       y = "Deaths Per Person") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1),
+  plot.margin = margin(t = 10, r = 6, b = 10, l = 6))
+  
+
+
+model_data_with_prediction$death_rate_difference <-( 
+model_data_with_prediction$predicted_deaths_per_person - 
+  model_data_with_prediction$state_deaths_per_person )
+
+model_data_with_prediction <- model_data_with_prediction %>% 
+                              arrange(desc(death_rate_difference))
+```
+
+```{r, fig.width=12, fig.height=6}
+par(mar = c(10, 8, 4, 2), mgp = c(6.2, 0.5, 0))
+barplot( 
+  model_data_with_prediction$death_rate_difference,
+  names.arg = model_data_with_prediction$states, 
+  las = 2, main = "Difference in Predicted vs Actual Deaths by State (incl territories & 'D.C')", 
+  xlab = "State_Province*",
+  ylab = "Predicted Deaths - Actual Deaths")
+
+```
+
+*Note: a negative number indicates Actual Deaths > Predicted Deaths
+
+## Observations
+While calculating the predicted deaths model, I discovered that there is no population data listed for the cruise ships. Given that I had no population data for the ships, I removed them from the prediction model. I feel confident that in the case of my model I could do this without losing integrity. I did, however look at the cases and deaths on the ships:
+
+- Grand Princess had 49 cases, 0 deaths
+
+- Diamond Princess had 103 cases, 3 deaths
+
+It is interesting to look at the difference between *Predicted deaths/person* and *Actual deaths/person* because it is a gauge of how well a state (or territory) handled the care of COVID patients during the pandemic. One could infer that those states in the negative (ie their actual deaths outnumbered the predicted deaths) have some improvements to make in terms of emergency preparedness, awareness, or overall care. Obviously, this is a generalization and further research is required to A) verify the accuracy of the model and B) determine the cause(s) of a "poor" performance. 
+
+The states could use the difference between the predicted deaths the actual death rates to gauge their performance in a healthcare crises and make changes to do better in future. 
+
+
+## Sources of Error and Bias:
+
+In trying to tidy and sort the data, I discovered that the data within the Column labeled "Province_State" contains more than the 50 US states, it also contains the territories, Washington DC, and the cruise ships "Diamond Princes" and "Grand Princess". One must be careful never to assume that all of the entries in this type of data are what you might expect. I started out thinking that only 50 states would be listed under this heading in the US Data.
+
+
+Human error in reporting and entering the data is a HUGE source. Mistakes in the data entry, failures in reporting cases and deaths are sources of error. 
+
+Cause of death is another source of bias (and also error). A coroner may mistake an elderly person's death for covid (or not) because they assume "they are just old", for example. There is a great risk for racism, sexism, ageism here. All sources of bias. 
+
+The timing of the data is something to consider as well. I have introduced my own bias in assuming the data for all of the states was started at the same time. But the reality is that California, Washington, were seeing a rise in COVID cases well before it spread to the interior of the country. Presumably the "early" states would have started collecting data earlier and will therefore have higher cases (and death rate) than an area that became involved later.  This is one of the main reasons for using cases/person and deaths/person  - these normalize the data. 
